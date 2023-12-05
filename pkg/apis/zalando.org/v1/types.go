@@ -13,11 +13,16 @@ import (
 // ScalingSchedule describes a namespaced time based metric to be used
 // in autoscaling operations.
 // +k8s:deepcopy-gen=true
+// +kubebuilder:resource:categories=all
+// +kubebuilder:printcolumn:name="Active",type=boolean,JSONPath=`.status.active`,description="Whether one or more schedules are currently active."
+// +kubebuilder:subresource:status
 type ScalingSchedule struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
 	Spec ScalingScheduleSpec `json:"spec"`
+	// +optional
+	Status ScalingScheduleStatus `json:"status"`
 }
 
 // +genclient
@@ -28,12 +33,17 @@ type ScalingSchedule struct {
 // ClusterScalingSchedule describes a cluster scoped time based metric
 // to be used in autoscaling operations.
 // +k8s:deepcopy-gen=true
+// +kubebuilder:resource:categories=all
+// +kubebuilder:printcolumn:name="Active",type=boolean,JSONPath=`.status.active`,description="Whether one or more schedules are currently active."
+// +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster
 type ClusterScalingSchedule struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
 	Spec ScalingScheduleSpec `json:"spec"`
+	// +optional
+	Status ScalingScheduleStatus `json:"status"`
 }
 
 // ScalingScheduleSpec is the spec part of the ScalingSchedule.
@@ -58,11 +68,16 @@ type Schedule struct {
 	// +optional
 	Period *SchedulePeriod `json:"period,omitempty"`
 	// Defines the starting date of a OneTime schedule. It has to
-	// be a RFC3339 formated date.
+	// be a RFC3339 formatted date.
 	// +optional
 	Date *ScheduleDate `json:"date,omitempty"`
-	// The duration in minutes that the configured value will be
+	// Defines the ending date of a OneTime schedule. It must be
+	// a RFC3339 formatted date.
+	// +optional
+	EndDate *ScheduleDate `json:"endDate,omitempty"`
+	// The duration in minutes (default 0) that the configured value will be
 	// returned for the defined schedule.
+	// +optional
 	DurationMinutes int `json:"durationMinutes"`
 	// The metric value that will be returned for the defined schedule.
 	Value int64 `json:"value"`
@@ -90,6 +105,10 @@ type SchedulePeriod struct {
 	// The startTime has the format HH:MM
 	// +kubebuilder:validation:Pattern="(([0-1][0-9])|([2][0-3])):([0-5][0-9])"
 	StartTime string `json:"startTime"`
+	// The endTime has the format HH:MM
+	// +kubebuilder:validation:Pattern="(([0-1][0-9])|([2][0-3])):([0-5][0-9])"
+	// +optional
+	EndTime string `json:"endTime"`
 	// The days that this schedule will be active.
 	Days []ScheduleDay `json:"days"`
 	// The location name corresponding to a file in the IANA
@@ -115,6 +134,16 @@ const (
 // of the OneTime type.
 // +kubebuilder:validation:Format="date-time"
 type ScheduleDate string
+
+// ScalingScheduleStatus is the status section of the ScalingSchedule.
+// +k8s:deepcopy-gen=true
+type ScalingScheduleStatus struct {
+	// Active is true if at least one of the schedules defined in the
+	// scaling schedule is currently active.
+	// +kubebuilder:default:=false
+	// +optional
+	Active bool `json:"active"`
+}
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
