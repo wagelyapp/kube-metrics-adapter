@@ -8,7 +8,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 	v1 "github.com/zalando-incubator/kube-metrics-adapter/pkg/apis/zalando.org/v1"
-	autoscalingv2 "k8s.io/api/autoscaling/v2beta2"
+	scheduledscaling "github.com/zalando-incubator/kube-metrics-adapter/pkg/controller/scheduledscaling"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -16,12 +17,15 @@ const (
 	hHMMFormat                   = "15:04"
 	defaultScalingWindowDuration = 1 * time.Minute
 	defaultRampSteps             = 10
+	defaultTimeZone              = "Europe/Berlin"
 )
 
 type schedule struct {
 	kind      string
 	date      string
+	endDate   string
 	startTime string
+	endTime   string
 	days      []v1.ScheduleDay
 	timezone  string
 	duration  int
@@ -74,6 +78,55 @@ func TestScalingScheduleCollector(t *testing.T) {
 				},
 			},
 			expectedValue: 100,
+		},
+		{
+			msg: "Return the right value - utilise end date instead of start date + duration for one time config",
+			schedules: []schedule{
+				{
+					date:     nowTime.Add(-2 * time.Hour).Format(time.RFC3339),
+					kind:     "OneTime",
+					duration: 60,
+					endDate:  nowTime.Add(1 * time.Hour).Format(time.RFC3339),
+					value:    100,
+				},
+			},
+			expectedValue: 100,
+		},
+		{
+			msg: "Return the right value - utilise start date + duration instead of end date for one time config",
+			schedules: []schedule{
+				{
+					date:     nowTime.Add(-2 * time.Hour).Format(time.RFC3339),
+					kind:     "OneTime",
+					duration: 150,
+					endDate:  nowTime.Add(-1 * time.Hour).Format(time.RFC3339),
+					value:    100,
+				},
+			},
+			expectedValue: 100,
+		},
+		{
+			msg: "Return the right value - use end date with no duration set for one time config",
+			schedules: []schedule{
+				{
+					date:    nowTime.Add(-2 * time.Hour).Format(time.RFC3339),
+					kind:    "OneTime",
+					endDate: nowTime.Add(1 * time.Hour).Format(time.RFC3339),
+					value:   100,
+				},
+			},
+			expectedValue: 100,
+		},
+		{
+			msg: "Return the right value (0) for one time config no duration or end date set",
+			schedules: []schedule{
+				{
+					date:  nowTime.Add(time.Minute * 1).Format(time.RFC3339),
+					kind:  "OneTime",
+					value: 100,
+				},
+			},
+			expectedValue: 0,
 		},
 		{
 			msg: "Return the right value for one time config - 30 seconds before ending",
@@ -196,7 +249,20 @@ func TestScalingScheduleCollector(t *testing.T) {
 					value:    100,
 				},
 			},
-			err: ErrInvalidScheduleDate,
+			err: scheduledscaling.ErrInvalidScheduleDate,
+		},
+		{
+			msg: "Return error for one time config end date not in RFC3339 format",
+			schedules: []schedule{
+				{
+					date:     nowTime.Add(-time.Minute * 20).Format(time.RFC3339),
+					endDate:  nowTime.Add(1 * time.Hour).Format(time.RFC822),
+					kind:     "OneTime",
+					duration: 15,
+					value:    100,
+				},
+			},
+			err: scheduledscaling.ErrInvalidScheduleDate,
 		},
 		{
 			msg: "Return the right value for two one time config",
@@ -250,6 +316,35 @@ func TestScalingScheduleCollector(t *testing.T) {
 					duration:  15,
 					value:     100,
 					startTime: nowTime.Format(hHMMFormat),
+					days:      []v1.ScheduleDay{nowWeekday},
+				},
+			},
+			expectedValue: 100,
+		},
+		{
+			msg: "Return the right value - utilise end date instead of start time + duration for repeating schedule",
+			schedules: []schedule{
+				{
+					kind:      "Repeating",
+					duration:  60,
+					value:     100,
+					startTime: nowTime.Add(-2 * time.Hour).Format(hHMMFormat),
+					// nowTime + 59m = 23:59.
+					endTime: nowTime.Add(59 * time.Minute).Format(hHMMFormat),
+					days:    []v1.ScheduleDay{nowWeekday},
+				},
+			},
+			expectedValue: 100,
+		},
+		{
+			msg: "Return the right value - utilise start time + duration instead of end time for repeating schedule",
+			schedules: []schedule{
+				{
+					kind:      "Repeating",
+					duration:  150,
+					value:     100,
+					startTime: nowTime.Add(-2 * time.Hour).Format(hHMMFormat),
+					endTime:   nowTime.Add(-1 * time.Hour).Format(hHMMFormat),
 					days:      []v1.ScheduleDay{nowWeekday},
 				},
 			},
@@ -320,7 +415,7 @@ func TestScalingScheduleCollector(t *testing.T) {
 					days:      []v1.ScheduleDay{nowWeekday},
 				},
 			},
-			err: ErrInvalidScheduleStartTime,
+			err: scheduledscaling.ErrInvalidScheduleStartTime,
 		},
 		{
 			msg: "Return the right value for a repeating schedule in the right timezone even in the day after it",
@@ -505,15 +600,15 @@ func TestScalingScheduleCollector(t *testing.T) {
 
 			schedules := getSchedules(tc.schedules)
 			store := newMockStore(scalingScheduleName, namespace, tc.scalingWindowDurationMinutes, schedules)
-			plugin, err := NewScalingScheduleCollectorPlugin(store, now, defaultScalingWindowDuration, rampSteps)
+			plugin, err := NewScalingScheduleCollectorPlugin(store, now, defaultScalingWindowDuration, defaultTimeZone, rampSteps)
 			require.NoError(t, err)
 
 			clusterStore := newClusterMockStore(scalingScheduleName, tc.scalingWindowDurationMinutes, schedules)
-			clusterPlugin, err := NewClusterScalingScheduleCollectorPlugin(clusterStore, now, defaultScalingWindowDuration, rampSteps)
+			clusterPlugin, err := NewClusterScalingScheduleCollectorPlugin(clusterStore, now, defaultScalingWindowDuration, defaultTimeZone, rampSteps)
 			require.NoError(t, err)
 
 			clusterStoreFirstRun := newClusterMockStoreFirstRun(scalingScheduleName, tc.scalingWindowDurationMinutes, schedules)
-			clusterPluginFirstRun, err := NewClusterScalingScheduleCollectorPlugin(clusterStoreFirstRun, now, defaultScalingWindowDuration, rampSteps)
+			clusterPluginFirstRun, err := NewClusterScalingScheduleCollectorPlugin(clusterStoreFirstRun, now, defaultScalingWindowDuration, defaultTimeZone, rampSteps)
 			require.NoError(t, err)
 
 			hpa := makeScalingScheduleHPA(namespace, scalingScheduleName)
@@ -581,14 +676,14 @@ func TestScalingScheduleObjectNotPresentReturnsError(t *testing.T) {
 		make(map[string]interface{}),
 		getByKeyFn,
 	}
-	plugin, err := NewScalingScheduleCollectorPlugin(store, time.Now, defaultScalingWindowDuration, defaultRampSteps)
+	plugin, err := NewScalingScheduleCollectorPlugin(store, time.Now, defaultScalingWindowDuration, defaultTimeZone, defaultRampSteps)
 	require.NoError(t, err)
 
 	clusterStore := mockStore{
 		make(map[string]interface{}),
 		getByKeyFn,
 	}
-	clusterPlugin, err := NewClusterScalingScheduleCollectorPlugin(clusterStore, time.Now, defaultScalingWindowDuration, defaultRampSteps)
+	clusterPlugin, err := NewClusterScalingScheduleCollectorPlugin(clusterStore, time.Now, defaultScalingWindowDuration, defaultTimeZone, defaultRampSteps)
 	require.NoError(t, err)
 
 	hpa := makeScalingScheduleHPA("namespace", "scalingScheduleName")
@@ -643,10 +738,10 @@ func TestReturnsErrorWhenStoreDoes(t *testing.T) {
 		},
 	}
 
-	plugin, err := NewScalingScheduleCollectorPlugin(store, time.Now, defaultScalingWindowDuration, defaultRampSteps)
+	plugin, err := NewScalingScheduleCollectorPlugin(store, time.Now, defaultScalingWindowDuration, defaultTimeZone, defaultRampSteps)
 	require.NoError(t, err)
 
-	clusterPlugin, err := NewClusterScalingScheduleCollectorPlugin(store, time.Now, defaultScalingWindowDuration, defaultRampSteps)
+	clusterPlugin, err := NewClusterScalingScheduleCollectorPlugin(store, time.Now, defaultScalingWindowDuration, defaultTimeZone, defaultRampSteps)
 	require.NoError(t, err)
 
 	hpa := makeScalingScheduleHPA("namespace", "scalingScheduleName")
@@ -750,10 +845,12 @@ func getSchedules(schedules []schedule) (result []v1.Schedule) {
 		switch schedule.kind {
 		case string(v1.OneTimeSchedule):
 			date := v1.ScheduleDate(schedule.date)
+			endDate := v1.ScheduleDate(schedule.endDate)
 			result = append(result,
 				v1.Schedule{
 					Type:            v1.OneTimeSchedule,
 					Date:            &date,
+					EndDate:         &endDate,
 					DurationMinutes: schedule.duration,
 					Value:           schedule.value,
 				},
@@ -761,6 +858,7 @@ func getSchedules(schedules []schedule) (result []v1.Schedule) {
 		case string(v1.RepeatingSchedule):
 			period := v1.SchedulePeriod{
 				StartTime: schedule.startTime,
+				EndTime:   schedule.endTime,
 				Days:      schedule.days,
 				Timezone:  schedule.timezone,
 			}

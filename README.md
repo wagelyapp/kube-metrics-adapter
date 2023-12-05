@@ -17,7 +17,7 @@ Here's an example of a `HorizontalPodAutoscaler` resource configured to get
 `requests-per-second` metrics from each pod of the deployment `myapp`.
 
 ```yaml
-apiVersion: autoscaling/v2beta2
+apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: myapp-hpa
@@ -54,10 +54,8 @@ policy](https://kubernetes.io/docs/setup/release/version-skew-policy/) offered
 for Kubernetes, this project aims to support the latest three minor releases of
 Kubernetes.
 
-The default supported API is `autoscaling/v2beta2` (available since `v1.12`).
-This API MUST be available in the cluster which is the default. However for
-GKE, this requires GKE v1.15.7 according to this [GKE
-Issue](https://issuetracker.google.com/issues/135624588).
+The default supported API is `autoscaling/v2` (available since `v1.23`).
+This API MUST be available in the cluster which is the default.
 
 ## Building
 
@@ -99,7 +97,7 @@ This is an example of using the pod collector to collect metrics from a json
 metrics endpoint of each pod matched by the HPA.
 
 ```yaml
-apiVersion: autoscaling/v2beta2
+apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: myapp-hpa
@@ -219,7 +217,7 @@ with the result of the query.
 This allows having multiple prometheus queries associated with a single HPA.
 
 ```yaml
-apiVersion: autoscaling/v2beta2
+apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: myapp-hpa
@@ -331,7 +329,7 @@ This is an example of an HPA that will scale based on `requests-per-second` for
 an ingress called `myapp`.
 
 ```yaml
-apiVersion: autoscaling/v2beta2
+apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: myapp-hpa
@@ -365,7 +363,7 @@ This is an example of an HPA that will scale based on `requests-per-second` for
 a routegroup called `myapp`.
 
 ```yaml
-apiVersion: autoscaling/v2beta2
+apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: myapp-hpa
@@ -404,6 +402,64 @@ the `backend` label under `matchLabels` for the metric.  The ingress annotation
 where the backend weights can be obtained can be specified through the flag
 `--skipper-backends-annotation`.
 
+## External RPS collector
+
+The External RPS collector, like Skipper collector, is a simple wrapper around the Prometheus collector to
+make it easy to define an HPA for scaling based on the RPS measured for a given hostname. When
+[skipper](https://github.com/zalando/skipper) is used as the ingress
+implementation in your cluster everything should work automatically, in case another reverse proxy is used as ingress, like [Nginx](https://github.com/kubernetes/ingress-nginx) for example, its necessary to configure which prometheus metric should be used through `--external-rps-metric-name <metric-name>` flag. Assuming `skipper-ingress` is being used or the appropriate metric name is passed using the flag mentioned previously this collector provides the correct Prometheus queries out of the
+box so users don't have to define those manually.
+
+### Supported metrics
+
+| Metric | Description | Type | Kind | K8s Versions |
+| ------------ | -------------- | ------- | -- | -- |
+| `requests-per-second` | Scale based on requests per second for a certain hostname. | External | | `>=1.12` |
+
+### Example: External Metric
+
+This is an example of an HPA that will scale based on `requests-per-second` for the RPS measured in the hostnames called: `www.example1.com` and `www.example2.com`; and weighted by 42%.
+
+```yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: myapp-hpa
+  annotations:
+    metric-config.external.example-rps.requests-per-second/hostname: www.example1.com,www.example2.com
+    metric-config.external.example-rps.requests-per-second/weight: "42"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: custom-metrics-consumer
+  minReplicas: 1
+  maxReplicas: 10
+  metrics:
+  - type: External
+    external:
+      metric:
+        name: example-rps
+        selector:
+          matchLabels:
+            type: requests-per-second
+      target:
+        type: AverageValue
+        averageValue: "42"
+```
+### Multiple hostnames per metric
+
+This metric supports a relation of n:1 between hostnames and metrics. The way it works is the measured RPS is the sum of the RPS rate of each of the specified hostnames. This value is further modified by the weight parameter explained below.
+
+### Metric weighting based on backend
+
+There are ingress-controllers, like skipper-ingress, that supports sending traffic to different backends based on some kind of configuration, in case of skipper annotations
+present on the `Ingress` object, or weights on the RouteGroup backends. By
+default the number of replicas will be calculated based on the full traffic
+served by these components.  If however only the traffic being routed to
+a specific hostname should be used then the weight for the configured hostname(s) might be specified via the `weight` annotation `metric-config.external.<metric-name>.request-per-second/weight` for the metric being configured.
+
+
 ## InfluxDB collector
 
 The InfluxDB collector maps [Flux](https://github.com/influxdata/flux) queries to metrics that can be used for scaling.
@@ -426,7 +482,7 @@ the query name which will be associated with the result of the query.  This
 allows having multiple flux queries associated with a single HPA.
 
 ```yaml
-apiVersion: autoscaling/v2beta2
+apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: myapp-hpa
@@ -514,7 +570,7 @@ This is an example of an HPA that will scale based on the length of an SQS
 queue.
 
 ```yaml
-apiVersion: autoscaling/v2beta2
+apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: myapp-hpa
@@ -566,7 +622,7 @@ This is an example of an HPA that will scale based on the specified value
 exposed by a ZMON check with id `1234`.
 
 ```yaml
-apiVersion: autoscaling/v2beta2
+apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: myapp-hpa
@@ -663,7 +719,7 @@ This is an example of using the HTTP collector to collect metrics from a json
 metrics endpoint specified in the annotations.
 
 ```yaml
-apiVersion: autoscaling/v2beta2
+apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: myapp-hpa
@@ -830,7 +886,7 @@ An HPA can reference the deployed `ClusterScalingSchedule` object as
 this example:
 
 ```yaml
-apiVersion: autoscaling/v2beta2
+apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: "myapp-hpa"
